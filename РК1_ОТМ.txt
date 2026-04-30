@@ -1,0 +1,60 @@
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import kagglehub
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import OrdinalEncoder
+
+sns.set(style="ticks")
+
+# Download latest version
+path = kagglehub.dataset_download("mohansacharya/graduate-admissions")
+
+print("Path to dataset files:", path)
+
+data = pd.read_csv(r'C:\Users\Artem\Downloads\Admission_Predict.csv', sep=",")
+
+print(data.head())
+
+#Проведём Масштабирование 1 признака, а именно GRE Score. Его значения находятся между 290 и 340, поэтому будем использовать MinMax масштабирование.
+
+sc1 = MinMaxScaler()
+sc1_data = sc1.fit_transform(data[['GRE Score']])
+
+plt.hist(data['GRE Score'], 50)
+plt.show()
+plt.hist(sc1_data, 50)
+plt.show()
+
+#Конкретно категориальных признаков я не нашёл в данном датасете, поэтому буду преобразовывать SOP, так как это и не просто данные, но и не чёткая
+#последовательность 1, 2, 3, 4, 5.
+#Начнём с метода label encoding
+
+cat_enc = data[['SOP']]
+
+print(cat_enc['SOP'].unique())
+
+le = LabelEncoder()
+cat_enc_le = le.fit_transform(cat_enc['SOP'])
+
+print(le.classes_)
+print(cat_enc_le)
+print(np.unique(cat_enc_le))
+
+#В результате этого метода мы получаем набор из списка 1 2 3 4 5 6 7 8, причём, благодаря сортировки в лексиграфическом порядке, новые значения
+#соответствуют старым в порядке возрастания от 1 до 5, хотя это и не имеет особого смысла
+
+#Теперь сделаем методом OrdinalEncoder
+
+cat_oe = data[['SOP']]
+
+oe = OrdinalEncoder()
+cat_enc_oe = oe.fit_transform(cat_oe)
+print(cat_enc_oe)
+print(np.unique(cat_enc_oe))
+
+#И мы получаем такой же результат. Сортировка в лексикографическом порядке нам тут помогла, но на практике она может вызывать путаницу.
+
+plt.close()

@@ -1,0 +1,60 @@
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import kagglehub
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import OrdinalEncoder
+
+sns.set(style="ticks")
+
+#Изначально у меня был датасет№4, но в нём нету данных, которые можно категоризировать, поэтому я взял 3ий
+
+# Download latest version
+#path = kagglehub.dataset_download("carlolepelaars/toy-dataset")
+
+#print("Path to dataset files:", path)
+
+data = pd.read_csv(r'C:\Users\Artem\Downloads\toy_dataset.csv', sep=",")
+
+print(data.head())
+
+#Проведём Масштабирование 1 признака, а именно Age. Его значения находятся между 25 и 65, поэтому будем использовать MinMax масштабирование.
+
+sc1 = MinMaxScaler()
+sc1_data = sc1.fit_transform(data[['Age']])
+
+plt.hist(data['Age'], 50)
+plt.show()
+plt.hist(sc1_data, 50)
+plt.show()
+
+#Проведём категоризацию по колонке City. Сначала проведём методом LabelEncoder
+
+cat_enc = data[['City']]
+
+print(cat_enc['City'].unique())
+
+le = LabelEncoder()
+cat_enc_le = le.fit_transform(cat_enc['City'])
+
+print(le.classes_)
+print(cat_enc_le)
+print(np.unique(cat_enc_le))
+
+#Мы получаем набор городов в цифровом формате. Они сортируются по алфавиту, поэтому последовательность мало, что даёт для понимания
+
+#Теперь сделаем методом OrdinalEncoder
+
+cat_oe = data[['City']]
+
+oe = OrdinalEncoder()
+cat_enc_oe = oe.fit_transform(cat_oe)
+print(cat_enc_oe)
+print(np.unique(cat_enc_oe))
+
+#И мы получаем такой же результат. Пусть данный метод лучше использовать на нескольких  параметрах, чтобы сделать матрицу, но я не вижу тут
+#других подходящих данных, так что оставлю так
+
+plt.close()
