@@ -1,0 +1,177 @@
+# Импорт необходимых библиотек
+import matplotlib.image as mpimg
+from io import BytesIO
+import numpy as np
+import pandas as pd
+from sklearn.datasets import load_wine
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+from operator import itemgetter
+import warnings
+
+from trees import get_png_tree
+
+warnings.filterwarnings('ignore') # Игнорируем предупреждения для чистоты вывода
+
+#Загрузка датасета и первичный анализ ---
+print("="*50)
+print("1. Загрузка и анализ датасета Wine")
+print("="*50)
+wine = load_wine()
+wine_x_ds = pd.DataFrame(data=wine['data'], columns=wine['feature_names'])
+wine_y_ds = wine.target # Целевая переменная
+
+print("Размерность датасета:", wine_x_ds.shape)
+print("Количество классов:", len(np.unique(wine_y_ds)))
+print("\nЦелевые классы и их названия:")
+for i, name in enumerate(wine.target_names):
+    print(f"  Класс {i}: {name}")
+
+# Проверка на пропуски
+print("\nПроверка на наличие пропусков:")
+print(wine_x_ds.isnull().sum())
+
+print("\nПервые 5 строк датасета:")
+print(wine_x_ds.head())
+print("\nСтатистическое описание признаков:")
+print(wine_x_ds.describe())
+
+# Пропусков нет, категориальные признаки отсутствуют (все признаки числовые).
+# Стандартизация признаков крайне рекомендуется для SVM и логистической регрессии.
+scaler = StandardScaler()
+wine_x_ds_scaled = scaler.fit_transform(wine_x_ds)
+wine_x_ds_scaled = pd.DataFrame(wine_x_ds_scaled, columns=wine.feature_names) # Обратно в DataFrame для удобства
+
+#Разделение выборки на обучающую и тестовую
+print("\n" + "="*50)
+print("2. Разделение данных на обучающую и тестовую выборки (70/30)")
+print("="*50)
+# Используем стратификацию (stratify), чтобы сохранить пропорции классов в выборках
+X_train, X_test, y_train, y_test = train_test_split(
+    wine_x_ds_scaled, wine_y_ds, test_size=0.3, random_state=42, stratify=wine_y_ds
+)
+print(f"Размер обучающей выборки: X: {X_train.shape}, y: {y_train.shape}")
+print(f"Размер тестовой выборки: X: {X_test.shape}, y: {y_test.shape}")
+
+#Обучение моделей
+print("\n" + "="*50)
+print("3. Обучение моделей")
+print("="*50)
+
+#Логистическая регрессия
+print("\n>>> Обучение логистической регрессии...")
+log_reg = LogisticRegression(random_state=42, max_iter=10000)
+log_reg.fit(X_train, y_train)
+y_pred_log = log_reg.predict(X_test)
+print("Логистическая регрессия обучена.")
+
+#Машина опорных векторов (SVM)
+print("\n>>> Обучение SVM...")
+svm_clf = SVC(kernel='rbf', random_state=42, probability=True)
+svm_clf.fit(X_train, y_train)
+y_pred_svm = svm_clf.predict(X_test)
+print("SVM обучена.")
+
+#Дерево решений
+print("\n>>> Обучение дерева решений...")
+tree_clf = DecisionTreeClassifier(random_state=42)
+tree_clf.fit(X_train, y_train)
+y_pred_tree = tree_clf.predict(X_test)
+print("Дерево решений обучено.")
+
+print("\n" + "="*50)
+print("4. Сравнение качества моделей")
+print("="*50)
+
+# Функция для удобного вывода метрик
+def evaluate_model(name, y_true, y_pred):
+    acc = accuracy_score(y_true, y_pred)
+    # Используем macro avg, так как у нас многоклассовая задача и классы сбалансированы
+    report = classification_report(y_true, y_pred, target_names=wine.target_names, output_dict=True)
+    f1_macro = report['macro avg']['f1-score']
+    return acc, f1_macro
+
+# Сбор метрик для всех моделей
+results = {}
+results['Logistic Regression'] = evaluate_model('Logistic Regression', y_test, y_pred_log)
+results['SVM'] = evaluate_model('SVM', y_test, y_pred_svm)
+results['Decision Tree'] = evaluate_model('Decision Tree', y_test, y_pred_tree)
+
+# Вывод результатов в виде таблицы
+print("\n{:<25} {:<15} {:<15}".format('Модель', 'Accuracy', 'F1 (macro avg)'))
+print("-" * 55)
+for model, metrics in results.items():
+    print("{:<25} {:<15.4f} {:<15.4f}".format(model, metrics[0], metrics[1]))
+
+# Определение лучшей модели
+best_model_name = max(results, key=lambda k: results[k][0]) # По accuracy
+print(f"\nЛучшая модель по Accuracy: {best_model_name}")
+
+# Визуализация матриц ошибок для каждой модели
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+models = [
+    ('Логистическая регрессия', y_pred_log),
+    ('SVM', y_pred_svm),
+    ('Дерево решений', y_pred_tree)
+]
+for ax, (name, y_pred) in zip(axes, models):
+    cm = confusion_matrix(y_test, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=wine.target_names)
+    disp.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
+    ax.set_title(name)
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+fig.suptitle('Матрицы ошибок для разных моделей', fontsize=16)
+plt.tight_layout()
+plt.show()
+
+print("\n" + "="*50)
+print("5. Важность признаков в дереве решений")
+print("="*50)
+
+def draw_feature_importances(tree_model, X_dataset, figsize=(18,5)):
+    list_to_sort = list(zip(X_dataset.columns.values, tree_model.feature_importances_))
+    sorted_list = sorted(list_to_sort, key=itemgetter(1), reverse=True)
+    labels = [x for x,_ in sorted_list]
+    data = [x for _,x in sorted_list]
+    print("Важность признаков (отсортировано):")
+    for feature, importance in sorted_list:
+        print(f"  {feature:<30}: {importance:.4f}")
+    # График
+    fig, ax = plt.subplots(figsize=figsize)
+    ind = np.arange(len(labels))
+    bars = ax.bar(ind, data, color='skyblue')
+    plt.xticks(ind, labels, rotation=45, ha='right')
+    plt.ylabel('Важность')
+    plt.title('Важность признаков в модели Дерева решений')
+    # Добавление значений над столбцами
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.005, f'{yval:.3f}', ha='center', va='bottom', fontsize=10)
+    plt.tight_layout()
+    plt.show()
+
+# Вызов функции для обученного дерева
+draw_feature_importances(tree_clf, X_train)
+
+print("\n" + "="*50)
+print("6. Визуализация дерева решений")
+print("="*50)
+
+#Визуализация дерева
+def end_tree(tree, feature_names, class_names):
+    png_data = get_png_tree(tree, feature_names) # Функция из исходного кода
+    img = mpimg.imread(BytesIO(png_data))
+    plt.figure(figsize=(20, 10))
+    plt.imshow(img)
+    plt.axis('off')
+    plt.tight_layout()
+    plt.title("Графическое представление дерева решений (полное)")
+    plt.show()
+
+end_tree(tree_clf, wine.feature_names, wine.target_names)

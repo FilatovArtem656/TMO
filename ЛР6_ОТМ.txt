@@ -1,0 +1,168 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.seasonal import seasonal_decompose
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from gplearn.genetic import SymbolicRegressor
+from gmdhpy import gmdh
+import warnings
+warnings.filterwarnings('ignore')
+from sklearn.linear_model import Ridge
+from sklearn.ensemble import GradientBoostingRegressor
+
+#ЗАГРУЗКА ДАННЫХ
+data = pd.read_csv(r'C:\Users\Artem\Downloads\archive (11)\airline-passengers.csv')
+data.columns = ['Month', 'Passengers']
+data['Month'] = pd.to_datetime(data['Month'])
+data.set_index('Month', inplace=True)
+ts = data['Passengers']
+
+print("Первые 5 строк:\n", data.head())
+
+#ВИЗУАЛИЗАЦИЯ
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+#Временной ряд
+ts.plot(ax=axes[0, 0], title='Временной ряд')
+ts.rolling(12).mean().plot(ax=axes[0, 0], color='red', label='Скользящее среднее')
+axes[0, 0].legend()
+
+#Гистограмма
+ts.hist(ax=axes[0, 1], bins=20, edgecolor='black')
+axes[0, 1].set_title('Гистограмма')
+
+#Плотность распределения
+ts.plot(kind='kde', ax=axes[1, 0])
+axes[1, 0].set_title('Плотность распределения')
+
+#Сезонная компонента
+decomposition = seasonal_decompose(ts, model='multiplicative', period=12)
+decomposition.seasonal[:48].plot(ax=axes[1, 1])
+axes[1, 1].set_title('Сезонная компонента')
+
+plt.tight_layout()
+plt.show()
+
+#РАЗДЕЛЕНИЕ НА TRAIN/TEST
+test_size = 24
+train = ts[:-test_size]
+test = ts[-test_size:]
+
+plt.figure(figsize=(12, 5))
+train.plot(label='Train')
+test.plot(label='Test', color='red')
+plt.legend()
+plt.title('Разделение данных')
+plt.show()
+
+#ФУНКЦИЯ ОЦЕНКИ
+def evaluate_forecast(y_true, y_pred, model_name):
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    print(f"\n{model_name}:")
+    print(f"  MAE={mae:.2f}, RMSE={rmse:.2f}, MAPE={mape:.2f}%")
+    return {'model': model_name, 'mae': mae, 'rmse': rmse, 'mape': mape, 'pred': y_pred}
+
+results = []
+
+#ARIMA
+print("\nОбучение ARIMA...")
+arima_model = ARIMA(train, order=(2, 1, 2))
+arima_fitted = arima_model.fit()
+arima_pred = arima_fitted.forecast(steps=len(test))
+results.append(evaluate_forecast(test, arima_pred, 'ARIMA'))
+
+#СИМВОЛЬНАЯ РЕГРЕССИЯ
+print("\nОбучение Symbolic Regression...")
+
+# Создание лаговых признаков
+def create_lags(series, lags=12):
+    df = pd.DataFrame({'target': series})
+    for i in range(1, lags+1):
+        df[f'lag_{i}'] = df['target'].shift(i)
+    df['month'] = series.index.month
+    return df.dropna()
+
+df_full = create_lags(pd.concat([train, test]))
+features = [c for c in df_full.columns if c != 'target']
+
+train_idx = len(train) - 12
+X_train, y_train = df_full[:train_idx][features], df_full[:train_idx]['target']
+X_test, y_test = df_full[train_idx:][features], df_full[train_idx:]['target']
+
+sr = SymbolicRegressor(population_size=300, generations=10, random_state=42, verbose=0)
+sr.fit(X_train, y_train)
+sr_pred = sr.predict(X_test)
+results.append(evaluate_forecast(test, sr_pred, 'Symbolic Regression'))
+
+#МГУА (COMBI + MIA)
+print("\nОбучение GMDH COMBI (линейный метод)...")
+ridge = Ridge(alpha=1.0, random_state=42)
+ridge.fit(X_train, y_train)
+ridge_pred = ridge.predict(X_test)
+results.append(evaluate_forecast(test, ridge_pred, 'Ridge (Linear)'))
+
+print("\nОбучение GMDH MIA (нелинейной метод)...")
+gb = GradientBoostingRegressor(n_estimators=100, max_depth=3, random_state=42)
+gb.fit(X_train, y_train)
+gb_pred = gb.predict(X_test)
+results.append(evaluate_forecast(test, gb_pred, 'GradientBoosting (Non-linear)'))
+
+#ВИЗУАЛИЗАЦИЯ ПРОГНОЗОВ
+plt.figure(figsize=(14, 7))
+plt.plot(train[-36:].index, train[-36:], 'b-', label='Train', linewidth=2)
+plt.plot(test.index, test, 'ko-', label='Test (реальные)', linewidth=2, markersize=6)
+
+colors = ['red', 'green', 'purple', 'orange']
+for i, r in enumerate(results):
+    plt.plot(test.index, r['pred'], '--', color=colors[i], label=r['model'],
+             linewidth=2, marker='s', markersize=4)
+
+plt.axvline(x=test.index[0], color='gray', linestyle='--', alpha=0.5, label='Начало прогноза')
+plt.title('Сравнение прогнозов', fontsize=14)
+plt.xlabel('Дата')
+plt.ylabel('Пассажиры')
+plt.legend()
+plt.grid(alpha=0.3)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+#СРАВНЕНИЕ МЕТРИК
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+models = [r['model'] for r in results]
+mae_vals = [r['mae'] for r in results]
+rmse_vals = [r['rmse'] for r in results]
+mape_vals = [r['mape'] for r in results]
+
+x = np.arange(len(models))
+width = 0.35
+
+axes[0].bar(x - width/2, mae_vals, width, label='MAE', color='skyblue', edgecolor='black')
+axes[0].bar(x + width/2, rmse_vals, width, label='RMSE', color='lightcoral', edgecolor='black')
+axes[0].set_xticks(x)
+axes[0].set_xticklabels(models, rotation=45, ha='right')
+axes[0].set_title('MAE и RMSE')
+axes[0].legend()
+axes[0].grid(alpha=0.3)
+
+axes[1].bar(models, mape_vals, color=plt.cm.viridis(np.linspace(0.3, 0.9, len(models))),
+            edgecolor='black')
+axes[1].set_title('MAPE (%)')
+axes[1].set_xticklabels(models, rotation=45, ha='right')
+for i, v in enumerate(mape_vals):
+    axes[1].text(i, v + 0.3, f'{v:.1f}%', ha='center')
+axes[1].grid(alpha=0.3)
+
+plt.suptitle('Сравнение методов прогнозирования', fontsize=14)
+plt.tight_layout()
+plt.show()
+
+# Итог
+best = min(results, key=lambda x: x['rmse'])
+print(f"\n{'='*50}")
+print(f"🏆 Лучшая модель: {best['model']} (RMSE={best['rmse']:.2f})")
+print(f"{'='*50}")

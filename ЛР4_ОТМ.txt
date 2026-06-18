@@ -1,0 +1,235 @@
+# Импорт необходимых библиотек
+import pandas as pd
+from operator import itemgetter
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import numpy as np
+import math
+from enum import Enum
+from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
+
+# Определение типа предсказания: классификация или регрессия
+class PredictionType(Enum):
+    CLASSIFICATION = 1
+    REGRESSION = 2
+
+# Собственная реализация алгоритма K ближайших соседей (KNN)
+class SimpleKNN:
+    # Обучение модели: сохранение обучающих данных
+    def fit(self, X_train: np.matrix, y_train: np.ndarray):
+        self._X_train = X_train
+        self._y_train = y_train
+
+    # Вычисление евклидова расстояния между двумя точками
+    def eucl_dist(self, p: np.ndarray, q: np.ndarray) -> float:
+        return math.sqrt(sum([(pi - qi) ** 2 for pi, qi in zip(p, q)]))
+
+    # Предсказание для одного объекта
+    def predict_for_single_object(self, K: int, \
+                                  prediction_type: PredictionType, \
+                                  X_o: np.ndarray, \
+                                  verbose=True) -> np.ndarray:
+        neighbors_list = []
+        # Вычисление расстояний до всех точек обучающей выборки
+        for i in range(self._X_train.shape[0]):
+            data_train_current_x = [x for x in self._X_train[['Square_Footage_mas', 'Neighborhood_Quality']].iloc[i]]
+            data_train_current_y = self._y_train[i]
+            dist = self.eucl_dist(X_o, data_train_current_x)
+            temp_res = (data_train_current_y, dist, data_train_current_x)
+            neighbors_list.append(temp_res)
+
+        # Сортировка соседей по расстоянию (от ближайшего к дальнему)
+        neighbors_list_sorted = sorted(neighbors_list, key=itemgetter(1))
+
+        # Подробный вывод информации
+        if verbose:
+            print()
+            print('**************************************')
+            print('Проверяемая точка: ', X_o)
+            print('**************************************')
+            print('Вывод отсортированного списка соседей:')
+            dist_list = []  # Список расстояний для графика
+            for cur_y, cur_dist, temp_x_1_2 in neighbors_list_sorted:
+                temp_x1, temp_x2 = temp_x_1_2
+                print('X1={0}, X2={1}, y={2}, расстояние={3:.2f}'.format(temp_x1, temp_x2, cur_y, cur_dist))
+                dist_list.append(cur_dist)
+            print()
+            print('Вывод расстояния для отсортированного списка соседей:')
+            plt.plot(dist_list)  # График расстояний до всех соседей
+            plt.show()
+
+        # Выбор K ближайших соседей
+        K_neighbors_list_sorted = neighbors_list_sorted[:K]
+        # Визуализация K ближайших соседей
+        if verbose:
+            print('Вывод К ближайших соседей:')
+            x1_list = []
+            x2_list = []
+            for cur_y, cur_dist, temp_x_1_2 in K_neighbors_list_sorted:
+                temp_x1, temp_x2 = temp_x_1_2
+                x1_list.append(temp_x1)
+                x2_list.append(temp_x2)
+                print('X1={0}, X2={1}, y={2}, расстояние={3:.2f}'.format(temp_x1, temp_x2, cur_y, cur_dist))
+            print()
+            print('Визуализация К ближайших соседей:')
+            # Синие точки - все обучающие данные, зелёные звёзды - K ближайших соседей, красный круг - тестовая точка
+            plt.plot(self._X_train['Square_Footage_mas'], self._X_train['Neighborhood_Quality'], 'b.', \
+                     x1_list, x2_list, 'g*', \
+                     [X_o[0]], [X_o[1]], 'ro')
+            plt.show()
+
+        # Предсказание в зависимости от типа задачи
+        if prediction_type == PredictionType.REGRESSION:
+            # Регрессия: возвращает среднее значение целевой переменной K соседей
+            arr = np.array([x for x, _, _ in K_neighbors_list_sorted])
+            return np.mean(arr)
+        elif prediction_type == PredictionType.CLASSIFICATION:
+            # Классификация: возвращает наиболее часто встречающийся класс
+            k_y_list = [y for y, _, _ in K_neighbors_list_sorted]
+            k_y_list_grouped_temp = np.unique(k_y_list, return_counts=True)
+            k_y_list_grouped = [[key, cnt] for key, cnt in zip(k_y_list_grouped_temp[0], k_y_list_grouped_temp[1])]
+            k_y_list_grouped_sorted = sorted(k_y_list_grouped, key=itemgetter(1), reverse=True)
+            if verbose:
+                print('Классы, соответствующие К ближайшим соседям:')
+                for i in k_y_list_grouped_sorted:
+                    print('класс={0}, количество элементов={1}'.format(i[0], i[1]))
+            return k_y_list_grouped_sorted[0][0]
+        else:
+            raise Exception('Неизвестный тип предсказания')
+
+    # Предсказание для набора тестовых объектов
+    def predict(self, K: int, \
+                prediction_type: PredictionType, \
+                X_test: np.matrix,
+                verbose=True) -> np.ndarray:
+        test_data_temp = []
+        # Извлечение признаков тестовых объектов
+        for i in range(X_test.shape[0]):
+            data_test_current_x = [x for x in X_test.iloc[i]]
+            test_data_temp.append(data_test_current_x)
+        # Предсказание для каждого тестового объекта
+        return [self.predict_for_single_object(K=K, prediction_type=prediction_type, X_o=i, verbose=verbose) for i in test_data_temp]
+
+
+# Функция преобразования цены дома в категорию (класс)
+def regr_to_class(y: float) -> str:
+    if y > 1000000:
+        result = 'A'
+    elif y > 600000:
+        result = 'B'
+    elif y > 200000:
+        result = 'C'
+    else:
+        result = 'D'
+    return result
+
+
+data_train = pd.read_csv(r'C:\Users\Artem\Downloads\house_price_regression_dataset.csv', sep=";")
+
+# Ограничение датасета первыми 10 записями для демонстрации
+data_train = data_train[:10]
+print(data_train)
+
+# Создание столбца с классами на основе цены дома
+data_train['House_Price_clas'] = \
+    data_train.apply(lambda row: regr_to_class(row['House_Price']), axis=1)
+
+# Масштабирование площади дома
+data_train['Square_Footage_mas'] = \
+    data_train.apply(lambda row: (row['Square_Footage'] / 500), axis=1)
+
+print(data_train)
+
+# Выделение первых 4 записей в качестве тестовой выборки
+data_test = data_train[:4]
+
+print(data_test)
+
+# Визуализация обучающих и тестовых данных
+fig, ax = plt.subplots(figsize=(8, 8))
+
+# Синие точки - обучающие данные, красные круги - тестовые данные
+ax.plot(data_train['Square_Footage_mas'], data_train['Neighborhood_Quality'], 'b.', \
+        data_test['Square_Footage_mas'], data_test['Neighborhood_Quality'], 'ro')
+
+# Настройка сетки и делений на осях
+ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+ax.yaxis.set_major_locator(ticker.MultipleLocator(1))
+ax.grid(which='major', color='k')
+
+# Подписи к осям
+plt.xlabel('$X_1$')
+plt.ylabel('$X_2$')
+
+# Добавление подписей к точкам (цена и класс)
+for coords in data_train[['Square_Footage_mas', 'Neighborhood_Quality', 'House_Price', 'House_Price_clas']].values:
+    x1, x2, y_cl, cl = coords[0], coords[1], coords[2], coords[3]
+    label = '{} ({})'.format(y_cl, cl)
+    ax.text(x1 + 0.1, x2, label, style='italic', fontsize=7)
+    ax.text(x1 + 0.1, x2, cl, style='italic', fontsize=10)
+    ax.text(x1, x2 - 0.3, y_cl, style='italic', fontsize=10)
+plt.show()
+
+# Создание и обучение модели KNN для регрессии
+simple_knn_regr = SimpleKNN()
+simple_knn_regr.fit(data_train[['Square_Footage_mas', 'Neighborhood_Quality']], data_train['House_Price'])
+print(simple_knn_regr._X_train)
+print(simple_knn_regr._y_train)
+
+# Создание и обучение модели KNN для классификации
+simple_knn_clas = SimpleKNN()
+simple_knn_clas.fit(data_train[['Square_Footage_mas', 'Neighborhood_Quality']], data_train['House_Price'])
+print(simple_knn_clas._X_train)
+print(simple_knn_clas._y_train)
+
+# Извлечение признаков первой тестовой точки для демонстрации
+data_test_0 = [x for x in data_test[['Square_Footage_mas', 'Neighborhood_Quality']].iloc[0]]
+print(data_test_0)
+
+# Предсказание регрессии для одной тестовой точки (K=5 соседей)
+simple_knn_regr_0 = simple_knn_regr.predict_for_single_object(K=5, prediction_type=PredictionType.REGRESSION, X_o=data_test_0)
+print(simple_knn_regr_0)
+
+# Проверка: вычисление среднего значения вручную для сравнения
+print(np.mean([262382, 504176, 229698, 173875, 703413]))
+
+# Предсказание классификации для одной тестовой точки (K=5 соседей)
+simple_knn_clas_0 = simple_knn_clas.predict_for_single_object(K=5, prediction_type=PredictionType.CLASSIFICATION, X_o=data_test_0)
+print(simple_knn_clas_0)
+
+# Предсказание регрессии для всех тестовых точек (K=5 соседей)
+simple_knn_regr_prediction = simple_knn_regr.predict(K=5, prediction_type=PredictionType.REGRESSION, X_test=data_test[['Square_Footage_mas', 'Neighborhood_Quality']])
+print(simple_knn_regr_prediction)
+
+# Предсказание классификации для всех тестовых точек (K=3 соседа)
+simple_knn_clas_prediction = simple_knn_clas.predict(K=3, prediction_type=PredictionType.CLASSIFICATION, X_test=data_test[['Square_Footage_mas', 'Neighborhood_Quality']])
+print(simple_knn_clas_prediction)
+
+# Сравнение с реализацией KNN из библиотеки scikit-learn
+# Классификация с помощью sklearn
+KNeighborsClassifierObj = KNeighborsClassifier(n_neighbors=3)
+print(KNeighborsClassifierObj)
+KNeighborsClassifierObj.fit(data_train[['Square_Footage_mas', 'Neighborhood_Quality']], data_train['House_Price_clas'])
+print(KNeighborsClassifierObj.predict(data_test[['Square_Footage_mas', 'Neighborhood_Quality']]))
+
+# Собственная реализация классификации для сравнения
+simple_knn_clas = SimpleKNN()
+simple_knn_clas.fit(data_train[['Square_Footage_mas', 'Neighborhood_Quality']], data_train['House_Price_clas'])
+simple_knn_clas_prediction = simple_knn_clas.predict(K=3, prediction_type=PredictionType.CLASSIFICATION, \
+                                                     X_test=data_test[['Square_Footage_mas', 'Neighborhood_Quality']], verbose=False)
+print(np.array(simple_knn_clas_prediction))
+
+# Регрессия с помощью sklearn
+KNeighborsRegressorObj = KNeighborsRegressor()
+print(KNeighborsRegressorObj)
+KNeighborsRegressorObj.fit(data_train[['Square_Footage_mas', 'Neighborhood_Quality']], data_train['House_Price'])
+print(KNeighborsRegressorObj.predict(data_test[['Square_Footage_mas', 'Neighborhood_Quality']]))
+
+# Собственная реализация регрессии для сравнения
+simple_knn_regr = SimpleKNN()
+simple_knn_regr.fit(data_train[['Square_Footage_mas', 'Neighborhood_Quality']], data_train['House_Price'])
+simple_knn_regr_prediction = simple_knn_regr.predict(K=5, prediction_type=PredictionType.REGRESSION, \
+                                                     X_test=data_test[['Square_Footage_mas', 'Neighborhood_Quality']], verbose=False)
+print(np.array(simple_knn_regr_prediction))
+
+plt.close()

@@ -1,0 +1,94 @@
+# Импорт необходимых библиотек
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import cross_val_score
+
+# Загрузка данных о ценах на дома из CSV файла
+data_train = pd.read_csv(r'C:\Users\Artem\Downloads\house_price_regression_dataset.csv', sep=";")
+
+# Вывод информации о датасете
+print(data_train.info())
+print(data_train.head())
+print(data_train.describe())
+
+# Обработка пропущенных значений
+for col in data_train.columns:
+    if data_train[col].dtype in ['int64', 'float64']:
+        data_train[col].fillna(data_train[col].mean())
+    else:
+        data_train[col].dropna()
+
+# Выбор всех числовых колонок
+numeric_cols = data_train.select_dtypes(include=['int64', 'float64']).columns.tolist()
+
+# Определение целевой переменной
+target = "House_Price"
+# Удаление целевой переменной из списка признаков
+numeric_cols.remove("House_Price")
+
+# Создание преобразователя для числовых признаков
+numeric_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='median')),
+    ('scaler', StandardScaler())
+])
+
+# Создание преобразователя для категориальных признаков
+categorical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('encoder', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+])
+
+# Создание препроцессора, объединяющего преобразования
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', numeric_transformer, numeric_cols)
+    ],
+    remainder='drop'
+)
+
+# Разделение на признаки (X) и целевую переменную (y)
+X = data_train.drop(target, axis=1)
+y = data_train[target]
+
+# Разделение на обучающую (80%) и тестовую (20%) выборки
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=333)
+
+# Создание базовой модели KNN с 5 соседями
+knn = KNeighborsRegressor(n_neighbors=5)
+
+# Создание пайплайна: препроцессинг + модель
+model = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('regressor', knn)
+])
+
+# Обучение модели
+model.fit(X_train, y_train)
+
+# Предсказание на тестовой выборке
+y_pred = model.predict(X_test)
+
+# Расчет метрик качества модели
+mae = mean_absolute_error(y_test, y_pred)  # Средняя абсолютная ошибка
+mse = mean_squared_error(y_test, y_pred)  # Среднеквадратичная ошибка
+rmse = np.sqrt(mse)  # Корень из среднеквадратичной ошибки
+r2 = r2_score(y_test, y_pred)  # Коэффициент детерминации R²
+
+# Вывод метрик базовой модели
+print(f"Базовая модель KNN (n_neighbors=5):")
+print(f"MAE: {mae:.2f}")
+print(f"MSE: {mse:.2f}")
+print(f"RMSE: {rmse:.2f}")
+print(f"R²: {r2:.4f}")
+
+# Кросс-валидация для оценки стабильности модели
+cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='r2')
+print(f"\nРезультаты кросс-валидации (R²): {cv_scores}")
+print(f"Среднее R²: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")

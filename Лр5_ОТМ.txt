@@ -1,0 +1,211 @@
+# Импорт необходимых библиотек
+import numpy as np
+import pandas as pd
+from typing import Dict
+from io import StringIO
+import os
+os.environ["PATH"] += os.pathsep + r'C:\Program Files (x86)\Graphviz\bin'
+import matplotlib.image as mpimg
+from io import BytesIO
+import pydotplus
+from sklearn.datasets import load_wine
+from sklearn.metrics import accuracy_score
+from sklearn.tree import DecisionTreeClassifier, export_graphviz
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import BaggingClassifier
+from sklearn.ensemble import AdaBoostClassifier
+from operator import itemgetter
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set(style="ticks")
+
+# Функция создания координатной сетки для визуализации границ решений
+def make_meshgrid(x, y, h=.02):
+    x_min, x_max = x.min() - 1, x.max() + 1
+    y_min, y_max = y.min() - 1, y.max() + 1
+    xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
+                         np.arange(y_min, y_max, h))
+    return xx, yy
+
+# Функция визуализации контуров (областей решений) классификатора
+def plot_contours(ax, clf, xx, yy, **params):
+    Z = clf.predict(np.c_[xx.ravel(), yy.ravel()])
+    Z = Z.reshape(xx.shape)
+    print(np.unique(Z))
+    out = ax.contourf(xx, yy, Z, **params)
+    return out
+
+# Функция для визуализации работы классификатора
+def plot_cl(clf):
+    title = clf.__repr__
+    clf.fit(wine_X, wine_y)
+    fig, ax = plt.subplots(figsize=(5,5))
+    # Разделение на два признака
+    X0, X1 = wine_X[:, 0], wine_X[:, 1]
+    xx, yy = make_meshgrid(X0, X1)
+    plot_contours(ax, clf, xx, yy, cmap=plt.cm.coolwarm, alpha=0.8)
+    ax.scatter(X0, X1, c=wine_y, cmap=plt.cm.coolwarm, s=20, edgecolors='k')
+    ax.set_xlim(xx.min(), xx.max())
+    ax.set_ylim(yy.min(), yy.max())
+    ax.set_xlabel('Sepal length')
+    ax.set_ylabel('Sepal width')
+    ax.set_xticks(())
+    ax.set_yticks(())
+    ax.set_title(title)
+    plt.show()
+
+# Функция для визуализации важности признаков
+def draw_feature_importances(tree_model, X_dataset, figsize=(10,5)):
+    """
+    Вывод важности признаков в виде графика
+    """
+    list_to_sort = list(zip(X_dataset.columns.values, tree_model.feature_importances_))
+    sorted_list = sorted(list_to_sort, key=itemgetter(1), reverse = True)
+    labels = [x for x,_ in sorted_list]
+    data = [x for _,x in sorted_list]
+    # Вывод графика
+    fig, ax = plt.subplots(figsize=figsize)
+    ind = np.arange(len(labels))
+    plt.bar(ind, data)
+    plt.xticks(ind, labels, rotation='vertical')
+    # Вывод значений важности над столбцами
+    for a,b in zip(ind, data):
+        plt.text(a-0.05, b+0.01, str(round(b,3)))
+    plt.show()
+    return labels, data
+
+# Функция для получения изображения дерева в формате PNG
+def get_png_tree(tree_model_param, feature_names_param):
+    dot_data = StringIO()
+    export_graphviz(tree_model_param, out_file=dot_data, feature_names=feature_names_param,
+                    filled=True, rounded=True, special_characters=True)
+    graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
+    return graph.create_png()  # Возврат PNG изображения
+
+# Функция для вычисления accuracy (точности) для каждого класса отдельно
+def accuracy_score_for_classes(
+    y_true: np.ndarray,
+    y_pred: np.ndarray) -> Dict[int, float]:
+    """
+    Вычисление метрики accuracy для каждого класса
+    y_true - истинные значения классов
+    y_pred - предсказанные значения классов
+    Возвращает словарь: ключ - метка класса,
+    значение - Accuracy для данного класса
+    """
+    d = {'t': y_true, 'p': y_pred}
+    df = pd.DataFrame(data=d)
+    classes = np.unique(y_true)
+    res = dict()
+    # Перебор меток классов
+    for c in classes:
+        # отфильтруем данные, которые соответствуют
+        # текущей метке класса в истинных значениях
+        temp_data_flt = df[df['t']==c]
+        temp_acc = accuracy_score(
+            temp_data_flt['t'].values,
+            temp_data_flt['p'].values)
+        res[c] = temp_acc
+    return res
+
+# Функция для вывода accuracy по каждому классу
+def print_accuracy_score_for_classes(
+    y_true: np.ndarray,
+    y_pred: np.ndarray):
+    """
+    Вывод метрики accuracy для каждого класса
+    """
+    accs = accuracy_score_for_classes(y_true, y_pred)
+    if len(accs)>0:
+        print('Метка \t Accuracy')
+    for i in accs:
+        print('{} \t {}'.format(i, accs[i]))
+
+# Функция для отображения последнего дерева в ансамбле
+def end_tree(tree):
+    png_data = get_png_tree(tree.estimators_[0], wine.feature_names[:2])
+    img = mpimg.imread(BytesIO(png_data))
+    # Визуализация дерева
+    plt.figure(figsize=(20, 10))
+    plt.imshow(img)
+    plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+
+wine = load_wine()
+# Использование только первых двух признаков для визуализации
+wine_X = wine.data[:, :2]
+wine_y = wine.target
+
+# ===================== БЭГГИНГ (BAGGING) =====================
+# Создание и обучение Bagging классификатора
+bc1 = BaggingClassifier(n_estimators=5, oob_score=True, random_state=10)
+bc1.fit(wine_X, wine_y)
+
+# Вывод индексов обучающих выборок для каждой базовой модели
+print(bc1.estimators_samples_)
+
+# Создание бинарной матрицы: какие объекты попали в обучающую выборку для каждой модели
+bin_array = np.zeros((5, wine_X.shape[0]))
+for i in range(5):
+    for j in bc1.estimators_samples_[i]:
+        bin_array[i][j] = 1
+print(bin_array)
+
+# Визуализация матрицы использования объектов (белый - OOB, синий - в обучении)
+fig, ax = plt.subplots(figsize=(12,2))
+ax.pcolor(bin_array, cmap='YlGnBu')
+plt.show()
+
+plt.close()
+
+# Расчёт размера OOB (Out-Of-Bag) выборки для каждой модели
+for i in range(5):
+    cur_data = bin_array[i]
+    len_cur_data = len(cur_data)
+    sum_cur_data = sum(cur_data)
+    # Вычисление доли OOB объектов
+    (len(bin_array[0]) - sum(bin_array[0])) / len(bin_array[0])
+    oob_i = (len_cur_data - sum_cur_data) / len_cur_data
+    print('Для модели № {} размер OOB составляет {}%'.format(i+1, round(oob_i, 4)*100.0))
+
+# Вывод OOB score
+print(bc1.oob_score_, 1-bc1.oob_score_)
+
+# Вывод OOB decision function для объектов 55-70
+print(bc1.oob_decision_function_[55:70])
+
+# Визуализация первого дерева в ансамбле
+end_tree(bc1)
+
+# Визуализация границ решений обычного дерева для сравнения
+plot_cl(DecisionTreeClassifier(random_state=1))
+
+# ===================== СЛУЧАЙНЫЙ ЛЕС (RANDOM FOREST) =====================
+# Создание и обучение случайного леса
+tree1 = RandomForestClassifier(n_estimators=5, oob_score=True, random_state=10)
+tree1.fit(wine_X, wine_y)
+
+# Вывод метрик случайного леса
+print(tree1.oob_score_, 1-tree1.oob_score_)
+print(tree1.oob_decision_function_[55:70])
+
+# Визуализация первого дерева в случайном лесе
+end_tree(tree1)
+
+# ===================== БУСТИНГ (ADA BOOST) =====================
+# Создание и обучение AdaBoost классификатора
+ab1 = AdaBoostClassifier(n_estimators=5, random_state=10)
+ab1.fit(wine_X, wine_y)
+
+# Визуализация первого дерева в ансамбле AdaBoost
+end_tree(ab1)
+
+# Вывод весов базовых моделей в AdaBoost
+print(ab1.estimator_weights_)
+# Вывод decision function для первых 10 объектов
+df1 = ab1.decision_function(wine_X)
+print(df1[:10])
+
+# Визуализация границ решений AdaBoost классификатора
+plot_cl(AdaBoostClassifier(random_state=1))

@@ -1,0 +1,491 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.seasonal import seasonal_decompose
+from gplearn.genetic import SymbolicRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# Для МГУА
+try:
+    from gmdh import Criterion, GmdhModel
+
+    GMDH_AVAILABLE = True
+except ImportError:
+    GMDH_AVAILABLE = False
+
+data = pd.read_csv(r'C:\Users\Artem\Downloads\archive (11)\airline-passengers.csv', sep=",")
+
+print("Первые 5 строк данных:")
+print(data.head())
+print(f"\nРазмерность данных: {data.shape}")
+print(f"Колонки: {data.columns.tolist()}")
+
+date_col = data.columns[0]
+value_col = data.columns[1]
+
+print(f"\nКолонка с датами: {date_col}")
+print(f"Колонка со значениями: {value_col}")
+
+# Преобразование дат
+data[date_col] = pd.to_datetime(data[date_col])
+data.set_index(date_col, inplace=True)
+
+# Проверка на пропуски
+print(f"\nПропуски в данных: {data.isnull().sum().sum()}")
+
+# Создание фигуры с подграфиками
+fig, axes = plt.subplots(3, 2, figsize=(16, 14))
+fig.suptitle('Анализ временного ряда авиапассажиров', fontsize=16, fontweight='bold')
+
+# График 1: Полный временной ряд
+axes[0, 0].plot(data.index, data[value_col], 'b-', linewidth=1.5)
+axes[0, 0].set_title('Полный временной ряд')
+axes[0, 0].set_ylabel('Количество пассажиров')
+axes[0, 0].grid(True, alpha=0.3)
+
+# График 2: Первые 24 точки (2 года)
+axes[0, 1].plot(data.index[:24], data[value_col][:24], 'g-o', markersize=4, linewidth=1.5)
+axes[0, 1].set_title('Первые 24 месяца (2 года)')
+axes[0, 1].set_ylabel('Количество пассажиров')
+axes[0, 1].grid(True, alpha=0.3)
+axes[0, 1].tick_params(axis='x', rotation=45)
+
+# График 3: Гистограмма распределения
+axes[1, 0].hist(data[value_col], bins=20, color='skyblue', edgecolor='black', alpha=0.7)
+axes[1, 0].set_title('Гистограмма распределения значений')
+axes[1, 0].set_xlabel('Количество пассажиров')
+axes[1, 0].set_ylabel('Частота')
+axes[1, 0].grid(True, alpha=0.3)
+
+# График 4: Плотность распределения
+data[value_col].plot(kind='kde', ax=axes[1, 1], color='red', linewidth=2)
+axes[1, 1].set_title('Плотность вероятности распределения')
+axes[1, 1].set_xlabel('Количество пассажиров')
+axes[1, 1].grid(True, alpha=0.3)
+
+# График 5: Boxplot для выявления выбросов
+axes[2, 0].boxplot(data[value_col], vert=False, patch_artist=True,
+                   boxprops=dict(facecolor='lightgreen'))
+axes[2, 0].set_title('Boxplot (ящик с усами)')
+axes[2, 0].set_xlabel('Количество пассажиров')
+
+# График 6: Скользящее среднее и стандартное отклонение
+rolling_mean = data[value_col].rolling(window=12).mean()
+rolling_std = data[value_col].rolling(window=12).std()
+axes[2, 1].plot(data.index, data[value_col], 'b-', label='Исходный ряд', alpha=0.5)
+axes[2, 1].plot(data.index, rolling_mean, 'r-', label='Скользящее среднее (12 мес.)', linewidth=2)
+axes[2, 1].fill_between(data.index, rolling_mean - 2 * rolling_std,
+                        rolling_mean + 2 * rolling_std, alpha=0.2, color='gray')
+axes[2, 1].set_title('Скользящее среднее и стандартное отклонение')
+axes[2, 1].legend(loc='upper left')
+axes[2, 1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# Декомпозиция временного ряда
+decomposition = seasonal_decompose(data[value_col], model='multiplicative', period=12)
+
+fig, axes = plt.subplots(4, 1, figsize=(14, 12))
+decomposition.observed.plot(ax=axes[0], title='Наблюдаемый ряд')
+axes[0].set_ylabel('Значение')
+decomposition.trend.plot(ax=axes[1], title='Тренд')
+axes[1].set_ylabel('Значение')
+decomposition.seasonal.plot(ax=axes[2], title='Сезонность')
+axes[2].set_ylabel('Значение')
+decomposition.resid.plot(ax=axes[3], title='Остатки')
+axes[3].set_ylabel('Значение')
+plt.tight_layout()
+plt.show()
+
+def test_stationarity(timeseries, title):
+    """Проверка стационарности ряда с помощью теста Дики-Фуллера"""
+    print(f'\nРезультаты теста для: {title}')
+    dftest = adfuller(timeseries, autolag='AIC')
+    dfoutput = pd.Series(dftest[0:4], index=['Test Statistic', 'p-value',
+                                             '#Lags Used', 'Number of Observations Used'])
+    for key, value in dftest[4].items():
+        dfoutput['Critical Value (%s)' % key] = value
+
+    print(dfoutput)
+
+    if dftest[1] <= 0.05:
+        print("✓ Ряд стационарен (p-value <= 0.05)")
+        return True
+    else:
+        print("✗ Ряд нестационарен (p-value > 0.05)")
+        return False
+
+
+is_stationary = test_stationarity(data[value_col], 'Исходный ряд')
+
+# Берем последние 2 года (24 месяца) для тестирования
+test_size = 24
+train = data[value_col][:-test_size]
+test = data[value_col][-test_size:]
+
+print(f"Размер обучающей выборки: {len(train)} месяцев ({len(train) // 12} лет)")
+print(f"Размер тестовой выборки: {len(test)} месяцев ({len(test) // 12} лет)")
+print(f"Обучающая выборка: {train.index[0].strftime('%Y-%m')} - {train.index[-1].strftime('%Y-%m')}")
+print(f"Тестовая выборка: {test.index[0].strftime('%Y-%m')} - {test.index[-1].strftime('%Y-%m')}")
+
+# Визуализация разделения
+plt.figure(figsize=(14, 6))
+plt.plot(train.index, train, 'b-', label='Обучающая выборка', linewidth=1.5)
+plt.plot(test.index, test, 'r-', label='Тестовая выборка', linewidth=1.5)
+plt.axvline(x=test.index[0], color='gray', linestyle='--', alpha=0.7)
+plt.title('Разделение временного ряда на обучающую и тестовую выборки')
+plt.xlabel('Дата')
+plt.ylabel('Количество пассажиров')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+def evaluate_forecast(y_true, y_pred, model_name):
+    """Расчет метрик качества прогноза"""
+    mae = mean_absolute_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+    print(f"\nМетрики для {model_name}:")
+    print(f"  MAE:  {mae:.2f}")
+    print(f"  MSE:  {mse:.2f}")
+    print(f"  RMSE: {rmse:.2f}")
+    print(f"  MAPE: {mape:.2f}%")
+
+    return {'model': model_name, 'mae': mae, 'mse': mse, 'rmse': rmse, 'mape': mape}
+
+
+# Список для хранения результатов
+all_forecast_results = []
+
+# Определение параметров ARIMA (p, d, q)
+# p - порядок авторегрессии (AR)
+# d - степень дифференцирования (I)
+# q - порядок скользящего среднего (MA)
+
+# Подбор оптимальных параметров (упрощенный подход)
+print("Подбор параметров ARIMA...")
+best_aic = np.inf
+best_order = None
+
+for p in range(0, 5):
+    for d in range(1, 3):
+        for q in range(0, 5):
+            try:
+                model = ARIMA(train, order=(p, d, q))
+                fitted = model.fit()
+                if fitted.aic < best_aic:
+                    best_aic = fitted.aic
+                    best_order = (p, d, q)
+            except:
+                continue
+
+print(f"Лучшие параметры ARIMA: order={best_order}, AIC={best_aic:.2f}")
+
+# Обучение финальной модели ARIMA
+arima_model = ARIMA(train, order=best_order)
+arima_fitted = arima_model.fit()
+
+print("\nСводка модели ARIMA:")
+print(arima_fitted.summary())
+
+# Прогнозирование на тестовый период
+arima_forecast = arima_fitted.forecast(steps=len(test))
+arima_forecast = pd.Series(arima_forecast, index=test.index)
+
+# Оценка качества
+arima_results = evaluate_forecast(test, arima_forecast, 'ARIMA')
+all_forecast_results.append(arima_results)
+
+# Создание признаков для символьной регрессии
+def create_features_for_sr(series, lags=12):
+    """Создание лаговых признаков для прогнозирования временного ряда"""
+    df = pd.DataFrame()
+    df['target'] = series.values
+
+    # Добавление лагов
+    for lag in range(1, lags + 1):
+        df[f'lag_{lag}'] = df['target'].shift(lag)
+
+    # Добавление временных признаков
+    df['month'] = series.index.month
+    df['year'] = series.index.year
+
+    # Добавление скользящих статистик
+    df['rolling_mean_3'] = df['target'].rolling(3).mean()
+    df['rolling_std_3'] = df['target'].rolling(3).std()
+    df['rolling_mean_6'] = df['target'].rolling(6).mean()
+    df['rolling_mean_12'] = df['target'].rolling(12).mean()
+
+    return df.dropna()
+
+
+# Подготовка данных
+print("Создание признаков для символьной регрессии...")
+df_all = create_features_for_sr(pd.concat([train, test]))
+feature_columns = [col for col in df_all.columns if col != 'target']
+
+# Разделение на train и test
+train_size = len(train) - 12  # Вычитаем лаги
+X_train_sr = df_all[:train_size][feature_columns]
+y_train_sr = df_all[:train_size]['target']
+X_test_sr = df_all[train_size:train_size + len(test)][feature_columns]
+y_test_sr = df_all[train_size:train_size + len(test)]['target']
+
+print(f"Размерность признаков: {X_train_sr.shape}")
+
+# Обучение символьной регрессии
+print("\nОбучение Symbolic Regressor...")
+sym_reg = SymbolicRegressor(
+    population_size=500,
+    generations=10,
+    stopping_criteria=0.01,
+    p_crossover=0.7,
+    p_subtree_mutation=0.1,
+    p_hoist_mutation=0.05,
+    p_point_mutation=0.1,
+    max_samples=0.9,
+    verbose=1,
+    random_state=42,
+    function_set=('add', 'sub', 'mul', 'div', 'sqrt', 'log', 'sin', 'cos')
+)
+
+sym_reg.fit(X_train_sr, y_train_sr)
+
+# Прогнозирование
+sr_forecast = sym_reg.predict(X_test_sr)
+sr_forecast = pd.Series(sr_forecast, index=test.index)
+
+# Оценка качества
+sr_results = evaluate_forecast(test, sr_forecast, 'Symbolic Regression')
+all_forecast_results.append(sr_results)
+
+# Вывод найденной формулы
+print("\nНайденная формула (упрощенное представление):")
+print(sym_reg._program)
+
+if GMDH_AVAILABLE:
+    # Подготовка данных для МГУА (те же признаки, что и для символьной регрессии)
+    X_train_gmdh = X_train_sr.values
+    y_train_gmdh = y_train_sr.values
+    X_test_gmdh = X_test_sr.values
+
+    #Линейный метод COMBI
+    print("\nОбучение линейной модели COMBI...")
+    try:
+        combi_model = GmdhModel(
+            criterion=Criterion.REGULARITY,
+            method='combi',
+            max_layer=5,
+            test_size=0.3,
+            n_epochs=50,
+            verbose=False
+        )
+        combi_model.fit(X_train_gmdh, y_train_gmdh)
+        combi_forecast = combi_model.predict(X_test_gmdh)
+        combi_forecast = pd.Series(combi_forecast, index=test.index)
+
+        combi_results = evaluate_forecast(test, combi_forecast, 'GMDH COMBI (Linear)')
+        all_forecast_results.append(combi_results)
+
+        print(f"\nКоличество слоев в модели COMBI: {combi_model.n_layers}")
+    except Exception as e:
+        print(f"Ошибка при обучении COMBI: {e}")
+
+    #Нелинейный метод MIA
+    print("\nОбучение нелинейной модели MIA...")
+    try:
+        mia_model = GmdhModel(
+            criterion=Criterion.REGULARITY,
+            method='mia',
+            max_layer=5,
+            test_size=0.3,
+            n_epochs=50,
+            polynomial_type='quadratic',  # Нелинейные полиномы
+            verbose=False
+        )
+        mia_model.fit(X_train_gmdh, y_train_gmdh)
+        mia_forecast = mia_model.predict(X_test_gmdh)
+        mia_forecast = pd.Series(mia_forecast, index=test.index)
+
+        mia_results = evaluate_forecast(test, mia_forecast, 'GMDH MIA (Non-linear)')
+        all_forecast_results.append(mia_results)
+
+        print(f"\nКоличество слоев в модели MIA: {mia_model.n_layers}")
+    except Exception as e:
+        print(f"Ошибка при обучении MIA: {e}")
+else:
+    print("Модели МГУА пропущены (библиотека не установлена).")
+
+# Таблица результатов
+print("\n{:<30} {:<10} {:<10} {:<10} {:<10}".format(
+    'Модель', 'MAE', 'RMSE', 'MAPE(%)', 'R²'))
+print("-" * 70)
+
+for result in all_forecast_results:
+    # Расчет R²
+    ss_res = np.sum((test - eval(result['model'].lower().replace(' ', '_') + '_forecast')) ** 2
+                    if result['model'] != 'Symbolic Regression' else
+                    np.sum((test - sr_forecast) ** 2))
+
+    # Упрощенный вывод
+    print("{:<30} {:<10.2f} {:<10.2f} {:<10.2f}".format(
+        result['model'], result['mae'], result['rmse'], result['mape']
+    ))
+
+# Основной график сравнения
+plt.figure(figsize=(16, 8))
+
+# Обучающая выборка
+plt.plot(train.index[-36:], train[-36:], 'b-', label='Обучающая выборка (последние 3 года)',
+         linewidth=1.5, alpha=0.7)
+
+# Тестовая выборка (реальные значения)
+plt.plot(test.index, test, 'ko-', label='Реальные значения (тест)',
+         linewidth=2, markersize=6)
+
+# Прогнозы
+colors = ['red', 'green', 'purple', 'orange', 'brown']
+forecasts = {
+    'ARIMA': arima_forecast,
+    'Symbolic Regression': sr_forecast,
+}
+
+if GMDH_AVAILABLE:
+    if 'combi_forecast' in locals():
+        forecasts['GMDH COMBI'] = combi_forecast
+    if 'mia_forecast' in locals():
+        forecasts['GMDH MIA'] = mia_forecast
+
+for (name, forecast), color in zip(forecasts.items(), colors):
+    plt.plot(test.index, forecast, '--', color=color, label=name,
+             linewidth=2, marker='s', markersize=4, alpha=0.8)
+
+plt.axvline(x=test.index[0], color='gray', linestyle='--', alpha=0.5,
+            label='Начало прогноза')
+plt.title('Сравнение прогнозов различными методами', fontsize=14, fontweight='bold')
+plt.xlabel('Дата')
+plt.ylabel('Количество пассажиров')
+plt.legend(loc='upper left', fontsize=10)
+plt.grid(True, alpha=0.3)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Отдельные графики для каждого метода
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+axes = axes.ravel()
+
+plot_data = [
+    ('ARIMA', arima_forecast, 0),
+    ('Symbolic Regression', sr_forecast, 1),
+]
+
+if GMDH_AVAILABLE:
+    if 'combi_forecast' in locals():
+        plot_data.append(('GMDH COMBI', combi_forecast, 2))
+    if 'mia_forecast' in locals():
+        plot_data.append(('GMDH MIA', mia_forecast, 3))
+
+for name, forecast, idx in plot_data:
+    ax = axes[idx]
+
+    # Последние точки обучения и тест
+    ax.plot(train.index[-24:], train[-24:], 'b-', label='Обучение', alpha=0.7)
+    ax.plot(test.index, test, 'ko-', label='Реальные', linewidth=2, markersize=5)
+    ax.plot(test.index, forecast, 'r--', label='Прогноз', linewidth=2, marker='s', markersize=4)
+    ax.axvline(x=test.index[0], color='gray', linestyle='--', alpha=0.5)
+
+    ax.set_title(name, fontsize=12, fontweight='bold')
+    ax.set_xlabel('Дата')
+    ax.set_ylabel('Пассажиры')
+    ax.legend(loc='upper left')
+    ax.grid(True, alpha=0.3)
+    ax.tick_params(axis='x', rotation=45)
+
+# Скрываем пустые подграфики
+for idx in range(len(plot_data), 4):
+    axes[idx].set_visible(False)
+
+plt.suptitle('Детальное сравнение прогнозов', fontsize=14, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+axes = axes.ravel()
+
+for name, forecast, idx in plot_data:
+    ax = axes[idx]
+    errors = test.values - forecast.values
+
+    ax.bar(range(len(errors)), errors, color=['red' if e < 0 else 'green' for e in errors])
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+    ax.set_title(f'Ошибки прогноза: {name}')
+    ax.set_xlabel('Месяц прогноза')
+    ax.set_ylabel('Ошибка (реальное - прогноз)')
+    ax.grid(True, alpha=0.3)
+
+    # Добавление текста со средней ошибкой
+    mean_error = np.mean(errors)
+    ax.text(0.02, 0.95, f'Средняя ошибка: {mean_error:.2f}',
+            transform=ax.transAxes, fontsize=10, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+# Скрываем пустые подграфики
+for idx in range(len(plot_data), 4):
+    axes[idx].set_visible(False)
+
+plt.suptitle('Анализ ошибок прогнозов', fontsize=14, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+# Создание сравнительной диаграммы
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# MAE и RMSE
+models = [r['model'] for r in all_forecast_results]
+mae_values = [r['mae'] for r in all_forecast_results]
+rmse_values = [r['rmse'] for r in all_forecast_results]
+
+x = np.arange(len(models))
+width = 0.35
+
+axes[0].bar(x - width / 2, mae_values, width, label='MAE', color='skyblue', edgecolor='black')
+axes[0].bar(x + width / 2, rmse_values, width, label='RMSE', color='lightcoral', edgecolor='black')
+axes[0].set_title('Сравнение MAE и RMSE')
+axes[0].set_xticks(x)
+axes[0].set_xticklabels(models, rotation=45, ha='right')
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
+
+# MAPE
+mape_values = [r['mape'] for r in all_forecast_results]
+colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(models)))
+axes[1].bar(models, mape_values, color=colors, edgecolor='black')
+axes[1].set_title('Сравнение MAPE (%)')
+axes[1].set_xticklabels(models, rotation=45, ha='right')
+axes[1].set_ylabel('MAPE (%)')
+axes[1].grid(True, alpha=0.3)
+
+# Добавление значений на столбцы
+for i, (mae, rmse, mape) in enumerate(zip(mae_values, rmse_values, mape_values)):
+    axes[1].text(i, mape + 0.5, f'{mape:.2f}%', ha='center', fontsize=9)
+
+plt.suptitle('Итоговое сравнение методов прогнозирования', fontsize=14, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+# Вывод лучшей модели
+best_model = min(all_forecast_results, key=lambda x: x['rmse'])
+print(f"\n🏆 Лучшая модель по RMSE: {best_model['model']}")
+print(f"   MAE: {best_model['mae']:.2f}")
+print(f"   RMSE: {best_model['rmse']:.2f}")
+print(f"   MAPE: {best_model['mape']:.2f}%")

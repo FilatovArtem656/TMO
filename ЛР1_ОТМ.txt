@@ -1,0 +1,64 @@
+# Импорт необходимых библиотек
+import numpy as np
+import pandas as pd
+from sklearn.datasets import *
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set_theme()
+
+# Создание DataFrame: объединение признаков и целевой переменной
+def make_dataframe(ds_function):
+    ds = ds_function()
+    df = pd.DataFrame(data= np.c_[ds['data'], ds['target']],
+                     columns= list(ds['feature_names']) + ['target'])
+    return df
+
+# Загрузка датасета
+wine = make_dataframe(load_wine)
+# Вывод первых 5 строк данных
+print(wine.head())
+
+# Проверка наличия пропущенных значений в каждом столбце
+for col in wine.columns:
+    temp_null_count = wine[wine[col].isnull()].shape[0]
+    print('{} - {}'.format(col, temp_null_count))
+
+# Вывод описательной статистики датасета
+print(wine.describe())
+
+# Создание диаграммы рассеяния для двух признаков
+fig, ax = plt.subplots(figsize=(10,10))
+sns.scatterplot(ax=ax, x='alcohol', y='ash', data=wine)
+plt.show()
+
+# Построение гистограммы распределения признака alcohol
+fig, ax = plt.subplots(figsize=(10,10))
+sns.histplot(wine['alcohol'])
+plt.show()
+
+# Создание матрицы парных диаграмм рассеяния для всех признаков
+sns.pairplot(wine)
+
+# Построение boxplot для признака alcohol (вертикальная ориентация)
+sns.boxplot(x=wine['alcohol'])
+plt.show()
+
+# Построение boxplot для признака alcohol (горизонтальная ориентация)
+sns.boxplot(y=wine['alcohol'])
+plt.show()
+
+# Построение violin plot для признака ash
+sns.violinplot(x=wine['ash'])
+plt.show()
+
+# Визуализация корреляционной матрицы в виде тепловой карты
+sns.heatmap(wine.corr())
+plt.show()
+
+# Создание маски для отображения только нижнего треугольника корреляционной матрицы
+mask = np.zeros_like(wine.corr(), dtype=np.bool)
+mask[np.triu_indices_from(mask)] = True
+sns.heatmap(wine.corr(), mask=mask)
+plt.show()
+
+plt.close()

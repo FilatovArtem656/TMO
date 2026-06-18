@@ -1,0 +1,243 @@
+# Импорт необходимых библиотек
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn import datasets
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
+from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
+import warnings
+
+warnings.filterwarnings('ignore')
+
+#ЗАГРУЗКА И ПОДГОТОВКА ДАТАСЕТА WINE
+wine = datasets.load_wine()
+X = wine.data
+y_true = wine.target
+feature_names = wine.feature_names
+target_names = wine.target_names
+
+print(f"\nРазмерность датасета: {X.shape}")
+print(f"Количество классов: {len(np.unique(y_true))}")
+print(f"Признаки: {feature_names}")
+print(f"Классы: {target_names}")
+
+#СОЗДАНИЕ ДАТАСЕТА D1 (ВСЕ 13 ПРИЗНАКОВ БЕЗ ЦЕЛЕВОГО)
+D1 = X.copy()
+print(f"\nD1 (исходный датасет): {D1.shape} - 13 признаков")
+
+# Стандартизация данных (важно для PCA и t-SNE)
+scaler = StandardScaler()
+D1_scaled = scaler.fit_transform(D1)
+
+#СНИЖЕНИЕ РАЗМЕРНОСТИ МЕТОДОМ PCA (ДАТАСЕТ D2)
+pca = PCA(n_components=2, random_state=42)
+D2 = pca.fit_transform(D1_scaled)
+print(f"\nD2 (PCA): {D2.shape} - 2 главные компоненты")
+print(f"Объясненная дисперсия PCA: {pca.explained_variance_ratio_}")
+print(f"Суммарная объясненная дисперсия: {np.sum(pca.explained_variance_ratio_):.3f}")
+
+#СНИЖЕНИЕ РАЗМЕРНОСТИ МЕТОДОМ t-SNE (ДАТАСЕТ D3)
+tsne = TSNE(n_components=2, random_state=42, perplexity=30, max_iter=1000)
+D3 = tsne.fit_transform(D1_scaled)  # Преобразуем данные в 2D пространство t-SNE
+print(f"D3 (t-SNE): {D3.shape} - 2 компоненты t-SNE")
+
+#ВИЗУАЛИЗАЦИЯ ДАТАСЕТОВ D2 И D3
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# Визуализация PCA (D2) с раскраской по реальным классам
+for i, target_name in enumerate(target_names):
+    axes[0].scatter(D2[y_true == i, 0], D2[y_true == i, 1],
+                    label=target_name, s=50, alpha=0.7, edgecolors='k', linewidth=0.5)
+axes[0].set_title('D2: PCA (2 главные компоненты)', fontsize=14, fontweight='bold')
+axes[0].set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} дисперсии)')
+axes[0].set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} дисперсии)')
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
+
+# Визуализация t-SNE (D3) с раскраской по реальным классам
+for i, target_name in enumerate(target_names):
+    axes[1].scatter(D3[y_true == i, 0], D3[y_true == i, 1],
+                    label=target_name, s=50, alpha=0.7, edgecolors='k', linewidth=0.5)
+axes[1].set_title('D3: t-SNE (2 компоненты)', fontsize=14, fontweight='bold')
+axes[1].set_xlabel('t-SNE компонента 1')
+axes[1].set_ylabel('t-SNE компонента 2')
+axes[1].legend()
+axes[1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('wine_dimensionality_reduction.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+#ФУНКЦИЯ ДЛЯ ОЦЕНКИ КАЧЕСТВА КЛАСТЕРИЗАЦИИ
+def evaluate_clustering(data, labels, method_name, dataset_name):
+    """
+    Оценка качества кластеризации с использованием трех метрик:
+    - Silhouette Score: мера компактности и разделимости кластеров (-1 до 1, выше лучше)
+    - Calinski-Harabasz Index: отношение межкластерной дисперсии к внутрикластерной (выше лучше)
+    - Davies-Bouldin Index: среднее сходство между кластерами (ниже лучше)
+    """
+    # Убираем шумовые точки для DBSCAN (метка -1)
+    if -1 in labels:
+        mask = labels != -1  # Маска для нешумовых точек
+        data_eval = data[mask]  # Данные без шума
+        labels_eval = labels[mask]  # Метки без шума
+        n_noise = np.sum(labels == -1)  # Количество шумовых точек
+        print(f"  Шумовых точек: {n_noise} ({n_noise / len(labels) * 100:.1f}%)")
+    else:
+        data_eval = data
+        labels_eval = labels
+
+    n_clusters = len(np.unique(labels_eval))  # Количество найденных кластеров
+
+    # Вычисляем метрики только если есть хотя бы 2 кластера
+    if n_clusters > 1 and len(data_eval) > n_clusters:
+        silhouette = silhouette_score(data_eval, labels_eval)
+        calinski_harabasz = calinski_harabasz_score(data_eval, labels_eval)
+        davies_bouldin = davies_bouldin_score(data_eval, labels_eval)
+    else:
+        silhouette = -1  # Невозможно вычислить для 1 кластера
+        calinski_harabasz = -1
+        davies_bouldin = float('inf')
+
+    return {
+        'method': method_name,
+        'dataset': dataset_name,
+        'n_clusters': n_clusters,
+        'silhouette': silhouette,
+        'calinski_harabasz': calinski_harabasz,
+        'davies_bouldin': davies_bouldin
+    }
+
+#КЛАСТЕРИЗАЦИЯ ТРЕМЯ МЕТОДАМИ ДЛЯ ВСЕХ ДАТАСЕТОВ
+datasets_dict = {
+    'D1 (исходный)': D1_scaled,
+    'D2 (PCA)': D2,
+    'D3 (t-SNE)': D3
+}
+
+n_clusters = 3
+all_results = []
+
+# Цикл по всем датасетам (D1, D2, D3)
+for dataset_name, data in datasets_dict.items():
+    print(f"\n{'─' * 50}")
+    print(f"Датасет: {dataset_name}")
+    print(f"{'─' * 50}")
+
+    #K-Means кластеризация
+    print("\n1. K-Means (разделительная кластеризация):")
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    labels_kmeans = kmeans.fit_predict(data)
+    results_kmeans = evaluate_clustering(data, labels_kmeans, 'K-Means', dataset_name)
+    all_results.append(results_kmeans)
+    print(f"  Кластеров: {results_kmeans['n_clusters']}")
+    print(f"  Silhouette Score: {results_kmeans['silhouette']:.4f}")  # Ближе к 1 = лучше
+    print(f"  Calinski-Harabasz Index: {results_kmeans['calinski_harabasz']:.2f}")  # Больше = лучше
+    print(f"  Davies-Bouldin Index: {results_kmeans['davies_bouldin']:.4f}")  # Меньше = лучше
+
+    #Агломеративная (иерархическая) кластеризация
+    agglo = AgglomerativeClustering(n_clusters=n_clusters)
+    labels_agglo = agglo.fit_predict(data)
+    results_agglo = evaluate_clustering(data, labels_agglo, 'Agglomerative', dataset_name)
+    all_results.append(results_agglo)
+    print(f"  Кластеров: {results_agglo['n_clusters']}")
+    print(f"  Silhouette Score: {results_agglo['silhouette']:.4f}")
+    print(f"  Calinski-Harabasz Index: {results_agglo['calinski_harabasz']:.2f}")
+    print(f"  Davies-Bouldin Index: {results_agglo['davies_bouldin']:.4f}")
+    #DBSCAN (плотностная кластеризация)
+    # Подбираем параметры для каждого датасета отдельно
+    if dataset_name == 'D1 (исходный)':
+        eps, min_samples = 2.5, 5  # Для 13-мерного пространства
+    elif dataset_name == 'D2 (PCA)':
+        eps, min_samples = 1.0, 5  # Для PCA-пространства
+    else:  # D3 (t-SNE)
+        eps, min_samples = 3.0, 5  # Для t-SNE-пространства
+
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)  # eps - радиус окрестности, min_samples - мин. точек
+    labels_dbscan = dbscan.fit_predict(data)
+    results_dbscan = evaluate_clustering(data, labels_dbscan, 'DBSCAN', dataset_name)
+    all_results.append(results_dbscan)
+    print(f"  Параметры: eps={eps}, min_samples={min_samples}")
+    print(f"  Кластеров: {results_dbscan['n_clusters']}")
+    if results_dbscan['n_clusters'] > 1:
+        print(f"  Silhouette Score: {results_dbscan['silhouette']:.4f}")
+        print(f"  Calinski-Harabasz Index: {results_dbscan['calinski_harabasz']:.2f}")
+        print(f"  Davies-Bouldin Index: {results_dbscan['davies_bouldin']:.4f}")
+
+
+#ВИЗУАЛИЗАЦИЯ РЕЗУЛЬТАТОВ КЛАСТЕРИЗАЦИИ
+fig, axes = plt.subplots(3, 3, figsize=(18, 16))
+datasets_names = ['D1 (исходный)', 'D2 (PCA)', 'D3 (t-SNE)']
+
+# Создаем сетку графиков 3x3: строки - датасеты, столбцы - методы
+for i, dataset_name in enumerate(datasets_names):
+    data = datasets_dict[dataset_name]
+
+    #K-Means визуализация
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    labels = kmeans.fit_predict(data)
+    ax = axes[i, 0]
+    if data.shape[1] == 13:  # Для D1 используем первые две размерности
+        scatter = ax.scatter(data[:, 0], data[:, 1], c=labels, cmap='viridis', s=50, alpha=0.8)
+    else:
+        scatter = ax.scatter(data[:, 0], data[:, 1], c=labels, cmap='viridis', s=50, alpha=0.8)
+    ax.set_title(f'{dataset_name} - K-Means', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Dimension 1' if i == 2 else ('Feature 1' if i == 0 else 'PC1'))
+    ax.set_ylabel('Dimension 2' if i == 2 else ('Feature 2' if i == 0 else 'PC2'))
+    ax.grid(True, alpha=0.3)
+
+    #Agglomerative визуализация
+    agglo = AgglomerativeClustering(n_clusters=n_clusters)
+    labels = agglo.fit_predict(data)
+    ax = axes[i, 1]
+    if data.shape[1] == 13:
+        scatter = ax.scatter(data[:, 0], data[:, 1], c=labels, cmap='viridis', s=50, alpha=0.8)
+    else:
+        scatter = ax.scatter(data[:, 0], data[:, 1], c=labels, cmap='viridis', s=50, alpha=0.8)
+    ax.set_title(f'{dataset_name} - Agglomerative', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Dimension 1' if i == 2 else ('Feature 1' if i == 0 else 'PC1'))
+    ax.set_ylabel('Dimension 2' if i == 2 else ('Feature 2' if i == 0 else 'PC2'))
+    ax.grid(True, alpha=0.3)
+
+    #DBSCAN визуализация
+    eps_values = {'D1 (исходный)': 2.5, 'D2 (PCA)': 1.0, 'D3 (t-SNE)': 3.0}
+    dbscan = DBSCAN(eps=eps_values[dataset_name], min_samples=5)
+    labels = dbscan.fit_predict(data)
+    ax = axes[i, 2]
+    if data.shape[1] == 13:
+        scatter = ax.scatter(data[:, 0], data[:, 1], c=labels, cmap='viridis', s=50, alpha=0.8)
+    else:
+        scatter = ax.scatter(data[:, 0], data[:, 1], c=labels, cmap='viridis', s=50, alpha=0.8)
+    ax.set_title(f'{dataset_name} - DBSCAN', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Dimension 1' if i == 2 else ('Feature 1' if i == 0 else 'PC1'))
+    ax.set_ylabel('Dimension 2' if i == 2 else ('Feature 2' if i == 0 else 'PC2'))
+    ax.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('wine_clustering_results.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+#СРАВНИТЕЛЬНЫЙ АНАЛИЗ
+
+# Анализ для каждого датасета отдельно
+for dataset_name in datasets_names:
+    print(f"\n{'─' * 50}")
+    print(f"Датасет: {dataset_name}")
+    print(f"{'─' * 50}")
+
+    dataset_results = [r for r in all_results if r['dataset'] == dataset_name]
+
+    # Сортировка по Silhouette Score (чем выше, тем лучше)
+    print("\nСортировка по Silhouette Score (↑ лучше):")
+    sorted_sil = sorted(dataset_results, key=lambda x: x['silhouette'], reverse=True)
+    for i, res in enumerate(sorted_sil, 1):
+        print(f"  {i}. {res['method']}: {res['silhouette']:.4f}")
+
+    # Сортировка по Davies-Bouldin Index (чем ниже, тем лучше)
+    print("\nСортировка по Davies-Bouldin Index (↓ лучше):")
+    sorted_db = sorted(dataset_results, key=lambda x: x['davies_bouldin'])
+    for i, res in enumerate(sorted_db, 1):
+        print(f"  {i}. {res['method']}: {res['davies_bouldin']:.4f}")
+
